@@ -8,7 +8,8 @@ import { SaveManager } from '@core/SaveManager';
 export class LapidoculusMode extends Mode {
   private player: Player;
   private enemy: Enemy;
-  private lastStiffenCollision: number = 0; // 경직 충돌 쿨다운
+  private stageTimer: number = 0;
+  private stageDuration: number = 60; // 60초 생존하면 클리어
   private clearMessageTime: number = 0;
   private gameOverMessageTime: number = 0;
 
@@ -23,13 +24,11 @@ export class LapidoculusMode extends Mode {
       return;
     }
 
+    // 스테이지 타이머
+    this.stageTimer += deltaTime;
+
     // 플레이어 업데이트
     this.player.update(deltaTime);
-
-    // 경직 충돌 쿨다운
-    if (this.lastStiffenCollision > 0) {
-      this.lastStiffenCollision -= deltaTime;
-    }
 
     this.enemy.update(deltaTime);
 
@@ -50,16 +49,8 @@ export class LapidoculusMode extends Mode {
       }
     }
 
-    // 속도 부스트 중 보스와 충돌하면 데미지
-    if (this.player.isSpeedBoosted() && Collider.checkAABB(this.player, this.enemy)) {
-      if (this.lastStiffenCollision <= 0) {
-        this.enemy.takeDamage();
-        this.lastStiffenCollision = 0.2; // 0.2초 쿨다운 (중복 충돌 방지)
-      }
-    }
-
-    // 게임 클리어 체크
-    if (this.enemy.isDead()) {
+    // 게임 클리어 체크: 일정 시간 생존
+    if (this.stageTimer >= this.stageDuration) {
       this.isCleared = true;
       this.clearMessageTime = 0;
       SaveManager.save({
@@ -116,7 +107,18 @@ export class LapidoculusMode extends Mode {
     ctx.fillStyle = '#00ff00';
     ctx.font = 'bold 14px Arial';
     ctx.fillText(`HP: ${this.player.getHealth()} / ${PLAYER_MAX_HEALTH}`, 20, 30);
-    ctx.fillText(`Boss HP: ${this.enemy.getHealth()}`, 20, 50);
+
+    // 남은 시간
+    const remainingTime = Math.max(0, this.stageDuration - this.stageTimer);
+    ctx.fillStyle = remainingTime < 10 ? '#ff0000' : '#00ff00';
+    ctx.font = 'bold 16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(`남은 시간: ${remainingTime.toFixed(1)}초`, SCREEN_WIDTH / 2, 30);
+
+    // 경직 상태
+    ctx.fillStyle = '#00ff00';
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'left';
     const stiffenStatus = this.player.getIsStiffening() ? `충전중: ${(this.player.getStiffenChargePercent() * 100).toFixed(0)}%` : '준비완료';
     ctx.fillText(`경직: ${stiffenStatus}`, 20, 70);
 
@@ -147,6 +149,6 @@ export class LapidoculusMode extends Mode {
     super.reset();
     this.player = new Player(SCREEN_WIDTH / 2, SCREEN_HEIGHT - 100);
     this.enemy = new Enemy(SCREEN_WIDTH / 2, 100);
-    this.lastStiffenCollision = 0;
+    this.stageTimer = 0;
   }
 }
