@@ -8,8 +8,7 @@ import { SaveManager } from '@core/SaveManager';
 export class LapidoculusMode extends Mode {
   private player: Player;
   private enemy: Enemy;
-  private stiffenAvailable: boolean = true;
-  private stiffenCooldown: number = 0;
+  private lastStiffenCollision: number = 0; // 경직 충돌 쿨다운
   private clearMessageTime: number = 0;
   private gameOverMessageTime: number = 0;
 
@@ -27,28 +26,35 @@ export class LapidoculusMode extends Mode {
     // 플레이어 업데이트
     this.player.update(deltaTime);
 
-    // 경직 쿨다운
-    if (!this.stiffenAvailable) {
-      this.stiffenCooldown -= deltaTime;
-      if (this.stiffenCooldown <= 0) {
-        this.stiffenAvailable = true;
-      }
+    // 경직 충돌 쿨다운
+    if (this.lastStiffenCollision > 0) {
+      this.lastStiffenCollision -= deltaTime;
     }
 
     this.enemy.update(deltaTime);
 
-    // 탄막 충돌 체크
-    const bullets = this.enemy.getBullets();
-    for (const bullet of bullets) {
-      if (Collider.checkAABB(this.player, bullet)) {
-        this.player.takeDamage();
-        bullet.active = false;
+    // 탄막 충돌 체크 (경직 중에는 무적)
+    if (!this.player.getIsStiffening()) {
+      const bullets = this.enemy.getBullets();
+      for (const bullet of bullets) {
+        if (Collider.checkAABB(this.player, bullet)) {
+          this.player.takeDamage();
+          bullet.active = false;
 
-        if (this.player.isDead()) {
-          this.isGameOver = true;
-          this.gameOverMessageTime = 0;
-          return;
+          if (this.player.isDead()) {
+            this.isGameOver = true;
+            this.gameOverMessageTime = 0;
+            return;
+          }
         }
+      }
+    }
+
+    // 경직 해제 후 보스와 충돌하면 데미지
+    if (this.player.isStiffenReleasingNow() && Collider.checkAABB(this.player, this.enemy)) {
+      if (this.lastStiffenCollision <= 0) {
+        this.enemy.takeDamage();
+        this.lastStiffenCollision = 0.2; // 0.2초 쿨다운 (중복 충돌 방지)
       }
     }
 
@@ -74,21 +80,10 @@ export class LapidoculusMode extends Mode {
     }
 
     this.player.setInput(inputX, inputY);
+    this.player.setStiffenInput(stiffenPressed);
 
     if (dashPressed) {
       this.player.dash();
-    }
-
-    if (stiffenPressed && this.stiffenAvailable) {
-      const duration = STIFFEN_DURATION_MIN + Math.random() * (STIFFEN_DURATION_MAX - STIFFEN_DURATION_MIN);
-      this.player.stiffen(duration);
-      this.stiffenAvailable = false;
-      this.stiffenCooldown = 1; // 1초 쿨다운
-    }
-
-    // 보스 피격 (간단히 근접으로)
-    if (this.player.getIsStiffened() && Collider.checkAABB(this.player, this.enemy)) {
-      this.enemy.takeDamage();
     }
   }
 
@@ -122,7 +117,8 @@ export class LapidoculusMode extends Mode {
     ctx.font = 'bold 14px Arial';
     ctx.fillText(`HP: ${this.player.getHealth()} / ${PLAYER_MAX_HEALTH}`, 20, 30);
     ctx.fillText(`Boss HP: ${this.enemy.getHealth()}`, 20, 50);
-    ctx.fillText(`Stiffen: ${this.stiffenAvailable ? '준비' : '쿨다운'}`, 20, 70);
+    const stiffenStatus = this.player.getIsStiffening() ? `충전중: ${(this.player.getStiffenChargePercent() * 100).toFixed(0)}%` : '준비완료';
+    ctx.fillText(`경직: ${stiffenStatus}`, 20, 70);
 
     // 클리어 메시지
     if (this.isCleared) {
@@ -151,7 +147,6 @@ export class LapidoculusMode extends Mode {
     super.reset();
     this.player = new Player(SCREEN_WIDTH / 2, SCREEN_HEIGHT - 100);
     this.enemy = new Enemy(SCREEN_WIDTH / 2, 100);
-    this.stiffenAvailable = true;
-    this.stiffenCooldown = 0;
+    this.lastStiffenCollision = 0;
   }
 }
