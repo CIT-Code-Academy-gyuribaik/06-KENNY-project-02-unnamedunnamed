@@ -50,8 +50,8 @@ export class LapidoculusMode extends Mode {
       }
     }
 
-    // 경직 해제 후 보스와 충돌하면 데미지
-    if (this.player.isStiffenReleasingNow() && Collider.checkAABB(this.player, this.enemy)) {
+    // 속도 부스트 중 보스와 충돌하면 데미지
+    if (this.player.isSpeedBoosted() && Collider.checkAABB(this.player, this.enemy)) {
       if (this.lastStiffenCollision <= 0) {
         this.enemy.takeDamage();
         this.lastStiffenCollision = 0.2; // 0.2초 쿨다운 (중복 충돌 방지)

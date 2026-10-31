@@ -23,10 +23,9 @@ export class Player extends GameObject {
   // 경직 상태: X를 누르고 있는 동안 충전, 떼면 방출
   private isStiffening: boolean = false; // X 누르는 중
   private stiffenChargeTime: number = 0; // 누적된 홀드 시간
-  private stiffenReleaseTime: number = 0; // 방출 후 이동 시간
-  private stiffenReleaseDirection: Vector2 = new Vector2(0, 0);
+  private speedBoostTime: number = 0; // 속도 부스트 지속 시간
   private stiffenMaxCharge: number = 2; // 최대 충전 시간 (초)
-  private stiffenReleaseMultiplier: number = 3; // 속도 배수
+  private speedBoostMultiplier: number = 1; // 속도 배수 (충전 시간에 비례)
 
   private dashDirection: Vector2 = new Vector2(1, 0);
   private inputX: number = 0;
@@ -51,13 +50,10 @@ export class Player extends GameObject {
       // X 키 뗐을 때
       if (this.stiffenChargeTime > 0) {
         this.isStiffening = false;
-        this.stiffenReleaseTime = this.stiffenChargeTime;
-        const moveDir = new Vector2(this.inputX, this.inputY).normalize();
-        if (moveDir.magnitude() > 0) {
-          this.stiffenReleaseDirection = moveDir;
-        } else {
-          this.stiffenReleaseDirection = this.dashDirection;
-        }
+        // 충전 시간에 비례해서 속도 부스트 설정 (충전시간 = 부스트 지속시간)
+        this.speedBoostTime = this.stiffenChargeTime;
+        // 속도 배수: 충전시간에 비례 (최대 충전시 3배)
+        this.speedBoostMultiplier = 1 + (this.stiffenChargeTime / this.stiffenMaxCharge) * 2;
       }
     }
     this.wasStiffenPressed = pressed;
@@ -75,51 +71,51 @@ export class Player extends GameObject {
       }
     }
 
-    // 경직 방출 중 (누른 시간만큼 빠르게 이동)
-    if (this.stiffenReleaseTime > 0) {
-      this.stiffenReleaseTime -= deltaTime;
-      this.velocity = this.stiffenReleaseDirection.multiply(PLAYER_SPEED * this.stiffenReleaseMultiplier);
-    } else if (!this.isStiffening && !this.isDashing) {
-      // 무적 상태 업데이트
-      if (this.isInvulnerable) {
-        this.invulnerabilityTime += deltaTime;
-        if (this.invulnerabilityTime >= DASH_INVULNERABILITY) {
-          this.isInvulnerable = false;
-          this.invulnerabilityTime = 0;
-        }
+    // 속도 부스트 상태
+    if (this.speedBoostTime > 0) {
+      this.speedBoostTime -= deltaTime;
+    }
+
+    // 무적 상태 업데이트
+    if (this.isInvulnerable) {
+      this.invulnerabilityTime += deltaTime;
+      if (this.invulnerabilityTime >= DASH_INVULNERABILITY) {
+        this.isInvulnerable = false;
+        this.invulnerabilityTime = 0;
       }
+    }
 
-      // 대시 상태 업데이트
-      if (this.isDashing) {
-        this.dashTime += deltaTime;
-        if (this.dashTime >= DASH_DURATION) {
-          this.isDashing = false;
-          this.dashTime = 0;
-          this.isInvulnerable = false;
-        }
-      } else {
-        // 대시 쿨다운
-        if (this.dashCooldownTime > 0) {
-          this.dashCooldownTime -= deltaTime;
-        }
-
-        // 일반 이동
-        const moveDir = new Vector2(inputX, inputY).normalize();
-        if (moveDir.magnitude() > 0) {
-          this.dashDirection = moveDir.clone();
-        }
-        this.velocity = moveDir.multiply(PLAYER_SPEED);
+    // 대시 상태 업데이트
+    if (this.isDashing) {
+      this.dashTime += deltaTime;
+      if (this.dashTime >= DASH_DURATION) {
+        this.isDashing = false;
+        this.dashTime = 0;
+        this.isInvulnerable = false;
       }
-
-      // 대시 중
-      if (this.isDashing) {
-        this.velocity = this.dashDirection.multiply(DASH_SPEED);
+    } else {
+      // 대시 쿨다운
+      if (this.dashCooldownTime > 0) {
+        this.dashCooldownTime -= deltaTime;
       }
     }
 
     // 경직 중에는 움직이지 않음
     if (this.isStiffening) {
       this.velocity = new Vector2(0, 0);
+    } else if (this.isDashing) {
+      // 대시 중
+      this.velocity = this.dashDirection.multiply(DASH_SPEED);
+    } else {
+      // 일반 이동
+      const moveDir = new Vector2(inputX, inputY).normalize();
+      if (moveDir.magnitude() > 0) {
+        this.dashDirection = moveDir.clone();
+      }
+
+      // 속도 부스트 적용
+      const currentSpeed = this.speedBoostTime > 0 ? PLAYER_SPEED * this.speedBoostMultiplier : PLAYER_SPEED;
+      this.velocity = moveDir.multiply(currentSpeed);
     }
 
     // 위치 업데이트
@@ -168,8 +164,8 @@ export class Player extends GameObject {
     return this.stiffenChargeTime / this.stiffenMaxCharge;
   }
 
-  isStiffenReleasingNow(): boolean {
-    return this.stiffenReleaseTime > 0;
+  isSpeedBoosted(): boolean {
+    return this.speedBoostTime > 0;
   }
 
   draw(ctx: CanvasRenderingContext2D): void {
@@ -208,6 +204,17 @@ export class Player extends GameObject {
       ctx.strokeStyle = '#ffff00';
       ctx.lineWidth = 1;
       ctx.strokeRect(this.getLeft(), this.getTop() - 8, this.width, 4);
+    }
+
+    // 속도 부스트 표시 (아래에 게이지 바)
+    if (this.speedBoostTime > 0) {
+      const boostPercent = this.speedBoostTime / this.stiffenMaxCharge;
+      const barWidth = this.width * boostPercent;
+      ctx.fillStyle = '#00ffff';
+      ctx.fillRect(this.getLeft(), this.getBottom() + 4, barWidth, 4);
+      ctx.strokeStyle = '#00ffff';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(this.getLeft(), this.getBottom() + 4, this.width, 4);
     }
   }
 }
