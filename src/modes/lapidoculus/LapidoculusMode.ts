@@ -1,6 +1,8 @@
 import { Mode } from '../Mode';
 import { Player } from './Player';
 import { Enemy } from './Enemy';
+import { KnifeMark } from './KnifeMark';
+import { KNIFE_MARK_SPAWN_MIN, KNIFE_MARK_SPAWN_MAX, KNIFE_MARK_MAX_COUNT, STAGE_1_DURATION } from '@utils/Constants';
 import { Collider } from '@entities/Collider';
 import { SCREEN_WIDTH, SCREEN_HEIGHT, PLAYER_MAX_HEALTH, STIFFEN_DURATION_MIN, STIFFEN_DURATION_MAX } from '@utils/Constants';
 import { SaveManager } from '@core/SaveManager';
@@ -9,9 +11,13 @@ export class LapidoculusMode extends Mode {
   private player: Player;
   private enemy: Enemy;
   private stageTimer: number = 0;
-  private stageDuration: number = 60; // 60초 생존하면 클리어
+  private stageDuration: number = STAGE_1_DURATION; // 3분 생존하면 클리어
   private clearMessageTime: number = 0;
   private gameOverMessageTime: number = 0;
+
+  // 1스테이지 기본 패턴: 칼자국
+  private knifeMarks: KnifeMark[] = [];
+  private knifeMarkSpawnTimer: number = KNIFE_MARK_SPAWN_MAX;
 
   constructor() {
     super();
@@ -32,12 +38,45 @@ export class LapidoculusMode extends Mode {
 
     this.enemy.update(deltaTime);
 
-    // 탄막 충돌 체크 (경직 중에는 무적)
-    if (!this.player.getIsStiffening()) {
+    // 칼자국 생성/업데이트
+    this.knifeMarkSpawnTimer -= deltaTime;
+    if (this.knifeMarkSpawnTimer <= 0) {
+      // 칼자국은 영구히 남음. 최대 개수에 도달하면 무작위로 1개를 지우고 새로 생성
+      const remaining = this.knifeMarks.filter((mark) => !mark.getIsRemoving());
+      if (remaining.length >= KNIFE_MARK_MAX_COUNT) {
+        remaining[Math.floor(Math.random() * remaining.length)].remove();
+      }
+      this.knifeMarks.push(KnifeMark.createRandom(this.player.position.x, this.player.position.y));
+      this.knifeMarkSpawnTimer = KNIFE_MARK_SPAWN_MIN + Math.random() * (KNIFE_MARK_SPAWN_MAX - KNIFE_MARK_SPAWN_MIN);
+    }
+    this.knifeMarks.forEach((mark) => mark.update(deltaTime));
+    this.knifeMarks = this.knifeMarks.filter((mark) => mark.active);
+
+    // 칼자국 충돌 체크 (베기 구간에만 피해, 무적 중에는 통과)
+    for (const mark of this.knifeMarks) {
+      if (mark.isDangerous() && Collider.checkPolygonAABB(mark.getPoints(), this.player) && this.player.takeDamage()) {
+        if (this.player.isDead()) {
+          this.isGameOver = true;
+          this.gameOverMessageTime = 0;
+          return;
+        }
+      }
+    }
+
+    // 보스 본체 충돌 체크: 보스와 겹쳐 있으면 피해 (무적 중에는 통과)
+    if (Collider.checkAABB(this.player, this.enemy) && this.player.takeDamage()) {
+      if (this.player.isDead()) {
+        this.isGameOver = true;
+        this.gameOverMessageTime = 0;
+        return;
+      }
+    }
+
+    // 탄막 충돌 체크 (대시/경직/피격 직후 무적 중에는 탄막이 통과)
+    if (!this.player.isInvincible()) {
       const bullets = this.enemy.getBullets();
       for (const bullet of bullets) {
-        if (Collider.checkAABB(this.player, bullet)) {
-          this.player.takeDamage();
+        if (Collider.checkAABB(this.player, bullet) && this.player.takeDamage()) {
           bullet.active = false;
 
           if (this.player.isDead()) {
@@ -83,30 +122,12 @@ export class LapidoculusMode extends Mode {
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    // 그리드 배경
-    ctx.strokeStyle = '#333333';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < SCREEN_WIDTH; i += 50) {
-      ctx.beginPath();
-      ctx.moveTo(i, 0);
-      ctx.lineTo(i, SCREEN_HEIGHT);
-      ctx.stroke();
-    }
-    for (let i = 0; i < SCREEN_HEIGHT; i += 50) {
-      ctx.beginPath();
-      ctx.moveTo(0, i);
-      ctx.lineTo(SCREEN_WIDTH, i);
-      ctx.stroke();
-    }
+    // 칼자국 (플레이어/보스보다 아래에 그림)
+    this.knifeMarks.forEach((mark) => mark.draw(ctx));
 
     // 게임 오브젝트
     this.player.draw(ctx);
     this.enemy.draw(ctx);
-
-    // UI
-    ctx.fillStyle = '#00ff00';
-    ctx.font = 'bold 14px Arial';
-    ctx.fillText(`HP: ${this.player.getHealth()} / ${PLAYER_MAX_HEALTH}`, 20, 30);
 
     // 남은 시간
     const remainingTime = Math.max(0, this.stageDuration - this.stageTimer);
@@ -150,5 +171,7 @@ export class LapidoculusMode extends Mode {
     this.player = new Player(SCREEN_WIDTH / 2, SCREEN_HEIGHT - 100);
     this.enemy = new Enemy(SCREEN_WIDTH / 2, 100);
     this.stageTimer = 0;
+    this.knifeMarks = [];
+    this.knifeMarkSpawnTimer = KNIFE_MARK_SPAWN_MAX;
   }
 }

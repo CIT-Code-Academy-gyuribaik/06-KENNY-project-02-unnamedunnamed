@@ -25,10 +25,5 @@ export class Bullet extends GameObject {
   draw(ctx: CanvasRenderingContext2D): void {
     ctx.fillStyle = '#ff0000';
     ctx.fillRect(this.getLeft(), this.getTop(), this.width, this.height);
-
-    // 테두리
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(this.getLeft(), this.getTop(), this.width, this.height);
   }
 }

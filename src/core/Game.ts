@@ -39,8 +39,8 @@ export class Game {
       (this.inputManager.isKeyDown('arrowdown') || this.inputManager.isKeyDown('s') ? 1 : 0) -
       (this.inputManager.isKeyDown('arrowup') || this.inputManager.isKeyDown('w') ? 1 : 0);
 
-    const dashPressed = this.inputManager.isKeyDown('z');
-    const stiffenPressed = this.inputManager.isKeyDown('x');
+    const dashPressed = this.inputManager.isCodeDown('Space'); // 대시: 스페이스바
+    const stiffenPressed = this.inputManager.isCodeDown('ShiftLeft'); // 경직: 왼쪽 Shift
     const pausePressed = this.inputManager.isKeyDown('escape');
 
     // ESC: 일시정지 토글 (한 번만)
