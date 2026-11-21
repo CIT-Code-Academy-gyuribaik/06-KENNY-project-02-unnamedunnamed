@@ -13,35 +13,59 @@ import {
   KNIFE_MARK_AIM_SPREAD,
   KNIFE_MARK_FOCUS_RATIO,
   KNIFE_MARK_FOCUS_SPREAD,
+  KNIFE_MARK_REFLECT_WINDOW,
 } from '@utils/Constants';
 
 export type KnifeMarkShape = 'parallelogram' | 'diamond';
+
+type LocalPoint = [number, number]; // (길이축 좌표, 두께축 좌표)
+
+// 잘린 조각이 이보다 짧으면 버림 (px)
+const MIN_PIECE_LENGTH = 3;
 
 /**
  * 칼자국: 무작위 위치/각도에 생기는 매우 얇은 사각형(평행사변형 또는 마름모)
  * 1) 예고(희미하게 표시, 피해 없음) → 2) 영구히 남음(선명, 피해 있음)
  * → 3) remove() 호출 시 사라짐(피해 없음)
+ * 슬러그에 닿은 부분만 잘려 나갈 수 있음: 원래 모양을 길이축 [clipMin, clipMax] 범위로 잘라 둔 조각으로 표현
  */
 export class KnifeMark {
   public active: boolean = true;
   private time: number = 0;
   private isRemoving: boolean = false;
   private fadeTime: number = 0;
+  private readonly center: Vector2;
+  private readonly u: Vector2; // 길이 방향 단위 벡터
+  private readonly v: Vector2; // 두께 방향 단위 벡터
+  private readonly halfThickness: number;
+  private readonly fullLocal: LocalPoint[]; // 잘리기 전 원래 모양 (로컬 좌표)
+  private readonly clipMin: number;
+  private readonly clipMax: number;
   private readonly points: Vector2[];
+  // 조각을 만들 때 원래 모양 정보를 그대로 넘기기 위해 보관
+  private readonly shapeArgs: { centerX: number; centerY: number; angle: number; length: number; thickness: number; shape: KnifeMarkShape };
 
-  constructor(centerX: number, centerY: number, angle: number, length: number, thickness: number, shape: KnifeMarkShape) {
-    // 길이 방향(u)과 두께 방향(v) 단위 벡터
-    const u = new Vector2(Math.cos(angle), Math.sin(angle));
-    const v = new Vector2(-Math.sin(angle), Math.cos(angle));
-    const center = new Vector2(centerX, centerY);
+  constructor(
+    centerX: number,
+    centerY: number,
+    angle: number,
+    length: number,
+    thickness: number,
+    shape: KnifeMarkShape,
+    clipMin: number = -Infinity,
+    clipMax: number = Infinity
+  ) {
+    this.u = new Vector2(Math.cos(angle), Math.sin(angle));
+    this.v = new Vector2(-Math.sin(angle), Math.cos(angle));
+    this.center = new Vector2(centerX, centerY);
+    this.halfThickness = thickness / 2;
     const halfL = length / 2;
     const halfT = thickness / 2;
 
     // 로컬 좌표 (길이축, 두께축) 기준 꼭짓점
-    let local: [number, number][];
     if (shape === 'diamond') {
       // 양 끝이 뾰족한 마름모
-      local = [
+      this.fullLocal = [
         [halfL, 0],
         [0, halfT],
         [-halfL, 0],
@@ -50,7 +74,7 @@ export class KnifeMark {
     } else {
       // 양 끝이 비스듬히 잘린 평행사변형
       const shear = thickness * 1.5;
-      local = [
+      this.fullLocal = [
         [-halfL + shear, -halfT],
         [halfL + shear, -halfT],
         [halfL - shear, halfT],
@@ -58,7 +82,128 @@ export class KnifeMark {
       ];
     }
 
-    this.points = local.map(([a, b]) => center.add(u.multiply(a)).add(v.multiply(b)));
+    const localExtent = this.getLocalExtent();
+    this.clipMin = Math.max(clipMin, localExtent[0]);
+    this.clipMax = Math.min(clipMax, localExtent[1]);
+    this.points = KnifeMark.clipLocal(this.fullLocal, this.clipMin, this.clipMax).map(([a, b]) =>
+      this.center.add(this.u.multiply(a)).add(this.v.multiply(b))
+    );
+
+    this.shapeArgs = { centerX, centerY, angle, length, thickness, shape };
+  }
+
+  // 원래 모양의 길이축 범위
+  private getLocalExtent(): [number, number] {
+    const as = this.fullLocal.map(([a]) => a);
+    return [Math.min(...as), Math.max(...as)];
+  }
+
+  // 볼록 다각형(로컬 좌표)을 길이축 min ≤ a ≤ max 범위로 자름 (Sutherland–Hodgman)
+  private static clipLocal(polygon: LocalPoint[], min: number, max: number): LocalPoint[] {
+    const clip = (pts: LocalPoint[], inside: (p: LocalPoint) => boolean, bound: number): LocalPoint[] => {
+      const out: LocalPoint[] = [];
+      for (let i = 0; i < pts.length; i++) {
+        const cur = pts[i];
+        const prev = pts[(i + pts.length - 1) % pts.length];
+        const curIn = inside(cur);
+        const prevIn = inside(prev);
+        if (curIn !== prevIn) {
+          const t = (bound - prev[0]) / (cur[0] - prev[0]);
+          out.push([bound, prev[1] + (cur[1] - prev[1]) * t]);
+        }
+        if (curIn) {
+          out.push(cur);
+        }
+      }
+      return out;
+    };
+    let result = polygon;
+    if (isFinite(min)) result = clip(result, (p) => p[0] >= min, min);
+    if (isFinite(max)) result = clip(result, (p) => p[0] <= max, max);
+    return result;
+  }
+
+  /**
+   * 볼록 다각형(월드 좌표)이 이 칼자국의 중심선을 덮는 길이축 구간 [시작, 끝] (없으면 null)
+   * margin: 다각형을 이만큼 넓혀서 판정 (칼자국 두께 등)
+   */
+  getCoveredInterval(polygon: Vector2[], margin: number): [number, number] | null {
+    // 다각형 중심 (변의 바깥쪽 법선 방향을 정하는 데 사용)
+    const centroid = polygon.reduce((s, p) => s.add(p), new Vector2(0, 0)).multiply(1 / polygon.length);
+    let lo = this.clipMin;
+    let hi = this.clipMax;
+    for (let i = 0; i < polygon.length; i++) {
+      const p1 = polygon[i];
+      const p2 = polygon[(i + 1) % polygon.length];
+      let n = new Vector2(-(p2.y - p1.y), p2.x - p1.x).normalize();
+      if (n.x === 0 && n.y === 0) continue;
+      if ((centroid.x - p1.x) * n.x + (centroid.y - p1.y) * n.y > 0) {
+        n = n.multiply(-1); // 바깥쪽을 향하도록
+      }
+      // 중심선 위의 점 C + u·s 가 n·(점 - p1) ≤ margin 을 만족하는 s 범위
+      const base = (this.center.x - p1.x) * n.x + (this.center.y - p1.y) * n.y - margin;
+      const slope = this.u.x * n.x + this.u.y * n.y;
+      if (Math.abs(slope) < 1e-9) {
+        if (base > 0) return null; // 평행하고 바깥쪽
+        continue;
+      }
+      const s = -base / slope;
+      if (slope > 0) hi = Math.min(hi, s);
+      else lo = Math.max(lo, s);
+      if (lo >= hi) return null;
+    }
+    return [lo, hi];
+  }
+
+  /**
+   * 주어진 구간들(길이축)을 지운 조각들을 반환. 지워진 부분은 사라지는(fade) 조각으로 함께 반환
+   * 이 칼자국 자체는 반환 목록으로 대체되어야 함
+   */
+  splitByErasing(intervals: [number, number][]): KnifeMark[] {
+    // 겹치는 구간 합치기
+    const sorted = intervals
+      .map(([a, b]): [number, number] => [Math.max(a, this.clipMin), Math.min(b, this.clipMax)])
+      .filter(([a, b]) => b > a)
+      .sort((x, y) => x[0] - y[0]);
+    const merged: [number, number][] = [];
+    for (const iv of sorted) {
+      const last = merged[merged.length - 1];
+      if (last && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1]);
+      else merged.push([iv[0], iv[1]]);
+    }
+    if (merged.length === 0) {
+      return [this];
+    }
+
+    const pieces: KnifeMark[] = [];
+    let cursor = this.clipMin;
+    for (const [a, b] of merged) {
+      if (a - cursor >= MIN_PIECE_LENGTH) pieces.push(this.makePiece(cursor, a, false)); // 남는 부분
+      pieces.push(this.makePiece(a, b, true)); // 지워지는 부분 (서서히 사라짐)
+      cursor = b;
+    }
+    if (this.clipMax - cursor >= MIN_PIECE_LENGTH) pieces.push(this.makePiece(cursor, this.clipMax, false));
+    return pieces;
+  }
+
+  private makePiece(min: number, max: number, erased: boolean): KnifeMark {
+    const { centerX, centerY, angle, length, thickness, shape } = this.shapeArgs;
+    const piece = new KnifeMark(centerX, centerY, angle, length, thickness, shape, min, max);
+    piece.time = this.time; // 예고/생성 시점 유지
+    if (erased) piece.remove();
+    return piece;
+  }
+
+  getHalfThickness(): number {
+    return this.halfThickness;
+  }
+
+  getCenter(): Vector2 {
+    return this.center;
+  }
+
+  getAxis(): Vector2 {
+    return this.u;
   }
 
   /**
@@ -134,6 +279,11 @@ export class KnifeMark {
   // 예고가 끝난 뒤부터 제거되기 전까지 계속 피해를 줌
   isDangerous(): boolean {
     return !this.isRemoving && this.time >= KNIFE_MARK_WARNING_TIME;
+  }
+
+  // 막 그어진 칼자국 (예고가 끝나 선명해진 뒤 KNIFE_MARK_REFLECT_WINDOW 이내): 일부 총알을 튕겨냄
+  isFresh(): boolean {
+    return this.isDangerous() && this.time < KNIFE_MARK_WARNING_TIME + KNIFE_MARK_REFLECT_WINDOW;
   }
 
   getPoints(): Vector2[] {

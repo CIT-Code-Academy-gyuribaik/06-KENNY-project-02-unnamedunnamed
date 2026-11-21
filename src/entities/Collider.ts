@@ -48,6 +48,16 @@ export class Collider {
     return true;
   }
 
+  // 두께가 있는 선분(a→b)을 꼭짓점 4개짜리 볼록 다각형으로
+  static segmentToQuad(a: Vector2, b: Vector2, thickness: number): Vector2[] {
+    let dir = b.subtract(a).normalize();
+    if (dir.x === 0 && dir.y === 0) {
+      dir = new Vector2(1, 0); // 길이 0이면 아무 방향
+    }
+    const n = new Vector2(-dir.y, dir.x).multiply(thickness / 2);
+    return [a.add(n), b.add(n), b.subtract(n), a.subtract(n)];
+  }
+
   static checkCircle(
     posX: number,
     posY: number,

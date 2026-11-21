@@ -9,8 +9,11 @@ import {
   DASH_COOLDOWN,
   DASH_SPEED,
   DASH_INVULNERABILITY,
+  HIT_INVULNERABILITY,
   PLAYER_MAX_HEALTH,
   PLAYER_TURN_SPEED,
+  KNOCKBACK_SPEED,
+  KNOCKBACK_DURATION,
 } from '@utils/Constants';
 
 export class Player extends GameObject {
@@ -25,6 +28,7 @@ export class Player extends GameObject {
   private dashCooldownTime: number = 0;
   private isInvulnerable: boolean = false;
   private invulnerabilityTime: number = 0;
+  private invulnerabilityDuration: number = DASH_INVULNERABILITY; // 대시/피격에 따라 다름
 
   // 경직 상태: X를 누르고 있는 동안 충전, 떼면 방출
   private isStiffening: boolean = false; // X 누르는 중
@@ -40,6 +44,14 @@ export class Player extends GameObject {
   private inputX: number = 0;
   private inputY: number = 0;
   private wasStiffenPressed: boolean = false;
+
+  // 넉백: 피격 시 공격 반대 방향으로 밀려남
+  private knockbackDirection: Vector2 = new Vector2(0, 0);
+  private knockbackTime: number = 0;
+
+  // 감속 디버프 (어뢰): 남은 시간 동안 일반 이동 속도에 배수 적용
+  private slowTime: number = 0;
+  private slowMultiplier: number = 1;
 
   constructor(x: number, y: number) {
     super(x, y, PLAYER_SIZE, PLAYER_SIZE);
@@ -90,10 +102,15 @@ export class Player extends GameObject {
       this.speedBoostTime -= deltaTime;
     }
 
+    // 감속 디버프
+    if (this.slowTime > 0) {
+      this.slowTime -= deltaTime;
+    }
+
     // 무적 상태 업데이트
     if (this.isInvulnerable) {
       this.invulnerabilityTime += deltaTime;
-      if (this.invulnerabilityTime >= DASH_INVULNERABILITY) {
+      if (this.invulnerabilityTime >= this.invulnerabilityDuration) {
         this.isInvulnerable = false;
         this.invulnerabilityTime = 0;
       }
@@ -120,6 +137,12 @@ export class Player extends GameObject {
     } else if (this.isDashing) {
       // 대시 중
       this.velocity = this.dashDirection.multiply(DASH_SPEED);
+    } else if (this.knockbackTime > 0) {
+      // 넉백 중: 이동 입력 무시, 속도는 선형으로 감소
+      const strength = this.knockbackTime / KNOCKBACK_DURATION;
+      this.velocity = this.knockbackDirection.multiply(KNOCKBACK_SPEED * strength);
+      this.knockbackTime -= deltaTime;
+      this.wasMoving = false;
     } else {
       // 일반 이동: 이동 각도가 입력 방향으로 서서히 회전 (정지 상태에서 출발하면 즉시 해당 방향)
       const isMoving = inputX !== 0 || inputY !== 0;
@@ -137,7 +160,10 @@ export class Player extends GameObject {
       this.wasMoving = isMoving;
 
       // 속도 부스트 적용
-      const currentSpeed = this.speedBoostTime > 0 ? PLAYER_SPEED * this.speedBoostMultiplier : PLAYER_SPEED;
+      let currentSpeed = this.speedBoostTime > 0 ? PLAYER_SPEED * this.speedBoostMultiplier : PLAYER_SPEED;
+      if (this.slowTime > 0) {
+        currentSpeed *= this.slowMultiplier;
+      }
       this.velocity = moveDir.multiply(currentSpeed);
     }
 
@@ -156,6 +182,7 @@ export class Player extends GameObject {
       this.dashCooldownTime = DASH_COOLDOWN;
       this.isInvulnerable = true;
       this.invulnerabilityTime = 0;
+      this.invulnerabilityDuration = DASH_INVULNERABILITY;
     }
   }
 
@@ -174,14 +201,41 @@ export class Player extends GameObject {
     return this.isDashing || this.isInvulnerable || this.isStiffening;
   }
 
-  // 실제로 피해를 받았으면 true 반환
-  takeDamage(): boolean {
+  // 실제로 피해를 받았으면 true 반환. knockbackDirection 이 주어지면 그 방향으로 밀려남
+  takeDamage(knockbackDirection?: Vector2): boolean {
     if (this.isInvincible()) {
       return false;
     }
     this.health -= 1;
+    if (knockbackDirection) {
+      const dir = knockbackDirection.normalize();
+      if (dir.x !== 0 || dir.y !== 0) {
+        this.knockbackDirection = dir;
+        this.knockbackTime = KNOCKBACK_DURATION;
+      }
+    }
     this.isInvulnerable = true;
     this.invulnerabilityTime = 0;
+    this.invulnerabilityDuration = HIT_INVULNERABILITY;
+    return true;
+  }
+
+  // 일정 시간 이동 속도 감소 (피해 없음). 다시 맞으면 시간이 처음부터 다시 시작
+  applySlow(multiplier: number, duration: number): void {
+    this.slowMultiplier = multiplier;
+    this.slowTime = duration;
+  }
+
+  isSlowed(): boolean {
+    return this.slowTime > 0;
+  }
+
+  // 즉사 (저격). 무적 중이면 무시하고 false 반환
+  kill(): boolean {
+    if (this.isInvincible()) {
+      return false;
+    }
+    this.health = 0;
     return true;
   }
 
